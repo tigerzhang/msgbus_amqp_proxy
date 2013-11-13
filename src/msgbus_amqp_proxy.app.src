@@ -1,0 +1,24 @@
+{application, msgbus_amqp_proxy,
+ [
+  {description, ""},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {mod, { msgbus_amqp_proxy_app, []}},
+  {env, [
+  			{rabbitmqs, [
+          		{msgbus_rabbitmq_local, [
+			      {name,        "msgbus_rabbitmq_local"},
+			      {exchange,    <<"msgbus_amqp_proxy">>},
+			      {amqp_user,   <<"guest">>},
+			      {amqp_pass,   <<"guest">>},
+			      {amqp_vhost,  <<"/">>},
+			      {amqp_host,   "localhost"},
+			      {amqp_port,   5672}
+			  	]}
+        	]}
+  ]}
+]}.
