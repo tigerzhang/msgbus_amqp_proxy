@@ -15,7 +15,7 @@
 %% under the License.
 
 -module(msgbus_amqp_proxy).
--export([start/0, send_test/0]).
+-export([start/0, send_test/0, send/2]).
 
 start() ->
 	application:start(amqp_client),
@@ -25,6 +25,15 @@ declare_bind(RoutingKey, Queue) ->
 	[ gen_server:call(Pid, {declare_bind, RoutingKey, Queue}) || Pid <- pg2:get_members(msgbus_amqp_clients) ],
 	ok.
 
+send(RoutingKey, Message) ->
+	case pg2:get_closest_pid(msgbus_amqp_clients) of
+		{error, Reason} ->
+			{error, Reason};
+		Pid ->
+			gen_server:call(Pid, {forward_to_amqp, RoutingKey, Message}),
+			ok
+	end.
+	
 send_test() ->
 	RoutingKey = <<"route">>,
 	declare_bind(RoutingKey, <<"test_queue">>),
