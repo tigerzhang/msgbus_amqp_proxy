@@ -17,8 +17,17 @@
 			      {amqp_pass,   <<"guest">>},
 			      {amqp_vhost,  <<"/">>},
 			      {amqp_host,   "localhost"},
-			      {amqp_port,   5672}
-			  	]}
+			      {amqp_port,   5672},
+			  	]},
+			{outgoing_queues, [
+		      	<<"1">>, <<"msgbus_mqtt_command">>,
+		      	<<"8">>, <<"msgbus_mqtt_command">>,
+		      	<<"12">>, <<"msgbus_mqtt_command">>
+		      	]},
+	      	{incoming_queues, [
+	      		<<"msgbus_frentend_queue_">>
+	      		]},
+	      	{node_tag, <<"front1">>}
         	]}
   ]}
 ]}.

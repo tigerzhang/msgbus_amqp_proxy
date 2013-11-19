@@ -18,7 +18,10 @@
 -behaviour(gen_server).
 -define(SERVER, ?MODULE).
 
+-compile({parse_transform, lager_transform}).
+
 -include_lib("amqp_client/include/amqp_client.hrl").
+-include_lib("elog/include/elog.hrl").
 
 -record(state, {
   name,
@@ -82,6 +85,34 @@ init(Params) ->
           io:format("declare exchange failed: ~p~n", [Return])
       end,
 
+	  % Subscribe backend->frentend queue
+      Prefix = <<"msgbus_frentend_queue_">>,
+	  FrontQueueId = <<"front1">>,
+	  ConsumeQueue = <<Prefix/binary, FrontQueueId/binary>>,
+	  case amqp_channel:call(Channel, #'queue.declare'{queue = ConsumeQueue}) of
+		  #'queue.declare_ok'{} ->
+	  		Tag = amqp_channel:subscribe( Channel,
+										  #'basic.consume'{queue = ConsumeQueue,
+														   no_ack = true},
+										  self()),
+			?DEBUG("Tag: ~p", [Tag]);
+		  Return2 ->
+			  io:format("declare queue failed: ~p~n", [Return2])
+	  end,
+	  
+	  RoutingKey = <<"msgbus_frentend_routekey_front1">>,
+	  Binding = #'queue.bind'{queue       = ConsumeQueue,
+					        exchange    = Exchange,
+	              			routing_key = RoutingKey},
+	  case amqp_channel:call(Channel, Binding) of
+		  #'queue.bind_ok'{} ->
+			  ?INFO("Bind succeeded: ~p",
+					 [{ConsumeQueue, Exchange, RoutingKey}]);
+		  Return3 ->
+			  ?ERROR("Bind failed: ~p",
+					 [{ConsumeQueue, Exchange, RoutingKey, Return3}])
+	  end,
+	  
       pg2:join(msgbus_amqp_clients, self());
     Error ->
 
@@ -135,6 +166,23 @@ handle_info({'DOWN', Ref, Type, Pid, Info}, State) ->
   timer:exit_after(timer:seconds(10), "Connection closed"),
 
   {noreply, State};
+handle_info(#'basic.consume_ok'{consumer_tag = CTag}, State) ->
+    ?INFO("Consumer Tag: ~p", [CTag]),
+    {noreply, State};
+handle_info({#'basic.deliver'{consumer_tag = CTag,
+                              delivery_tag = DeliveryTag,
+                              exchange = Exch,
+                              routing_key = RK},
+             #amqp_msg{payload = Data} = Content}, State) ->
+    ?INFO("ConsumerTag: ~p"
+         "~nDeliveryTag: ~p"
+         "~nExchange: ~p"
+         "~nRoutingKey: ~p"
+         "~nContent: ~p"
+         "~n",
+         [CTag, DeliveryTag, Exch, RK, Content]),
+    ?INFO("Data: ~p", [Data]),
+	{noreply, State};
 handle_info(_Info, State) ->
     {noreply, State}.
 

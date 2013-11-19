@@ -15,7 +15,7 @@
 %% under the License.
 
 -module(msgbus_amqp_proxy).
--export([start/0, send_test/0, send/2]).
+-export([start/0, send_test/0, send/2, declare_bind/2]).
 
 start() ->
 	application:start(amqp_client),
