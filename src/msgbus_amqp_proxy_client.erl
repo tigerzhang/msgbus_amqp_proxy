@@ -50,14 +50,14 @@
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
-start_link({Id, Params}) ->
-  gen_server:start_link({local, Id}, ?MODULE, Params, []).
+start_link({Id, Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
+  gen_server:start_link({local, Id}, ?MODULE, {Params, OutgoingQueues, IncomingQueues, NodeTag}, []).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Definitions
 %% ------------------------------------------------------------------
 
-init(Params) ->
+init({Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
   
   % io:format("Params: ~p~n", [Params]),
 
@@ -77,6 +77,8 @@ init(Params) ->
   
   case amqp_channel(AmqpParams) of
     {ok, Channel} ->  
+		
+		% declare exchange
       case amqp_channel:call(Channel,
         #'exchange.declare'{ exchange = Exchange, type = <<"topic">> }) of
         #'exchange.declare_ok'{} ->
@@ -85,33 +87,10 @@ init(Params) ->
           io:format("declare exchange failed: ~p~n", [Return])
       end,
 
-	  % Subscribe backend->frentend queue
-      Prefix = <<"msgbus_frentend_queue_">>,
-	  FrontQueueId = <<"front1">>,
-	  ConsumeQueue = <<Prefix/binary, FrontQueueId/binary>>,
-	  case amqp_channel:call(Channel, #'queue.declare'{queue = ConsumeQueue}) of
-		  #'queue.declare_ok'{} ->
-	  		Tag = amqp_channel:subscribe( Channel,
-										  #'basic.consume'{queue = ConsumeQueue,
-														   no_ack = true},
-										  self()),
-			?DEBUG("Tag: ~p", [Tag]);
-		  Return2 ->
-			  io:format("declare queue failed: ~p~n", [Return2])
-	  end,
+	  % Subscribe incoming queues
+	 [subscribe_incoming_queues(Key, Queue, Exchange, Channel, NodeTag) || {Key, Queue} <- IncomingQueues ],
 	  
-	  RoutingKey = <<"msgbus_frentend_routekey_front1">>,
-	  Binding = #'queue.bind'{queue       = ConsumeQueue,
-					        exchange    = Exchange,
-	              			routing_key = RoutingKey},
-	  case amqp_channel:call(Channel, Binding) of
-		  #'queue.bind_ok'{} ->
-			  ?INFO("Bind succeeded: ~p",
-					 [{ConsumeQueue, Exchange, RoutingKey}]);
-		  Return3 ->
-			  ?ERROR("Bind failed: ~p",
-					 [{ConsumeQueue, Exchange, RoutingKey, Return3}])
-	  end,
+	  declare_and_bind_outgoing_queues(Channel, Exchange, OutgoingQueues),
 	  
       pg2:join(msgbus_amqp_clients, self());
     Error ->
@@ -243,3 +222,50 @@ maybe_new_pid(Group, StartFun) ->
     Pid ->
       {ok, Pid}
   end.
+
+subscribe_incoming_queues(Key, Queue, Exchange, Channel, NodeTag) ->
+	  case binary:last(Queue) of
+		  $_ ->
+			  ConsumeQueue = <<Queue/binary, NodeTag/binary>>;
+		  _ ->
+			  ConsumeQueue = Queue
+	  end,
+	  
+	  case amqp_channel:call(Channel, #'queue.declare'{queue = ConsumeQueue}) of
+		  #'queue.declare_ok'{} ->
+	  		Tag = amqp_channel:subscribe( Channel,
+										  #'basic.consume'{queue = ConsumeQueue,
+														   no_ack = true},
+										  self()),
+			?DEBUG("Tag: ~p", [Tag]);
+		  Return2 ->
+			  io:format("declare queue failed: ~p~n", [Return2])
+	  end,
+	  
+	  KeyEnd = binary:last(Key),
+	  case KeyEnd of
+		  $_ ->
+			  RoutingKey = << Key/binary, NodeTag/binary >>;
+		  _ ->
+			  RoutingKey = Key
+	  end,
+	  
+	  Binding = #'queue.bind'{queue       = ConsumeQueue,
+					        exchange    = Exchange,
+	              			routing_key = RoutingKey},
+	  case amqp_channel:call(Channel, Binding) of
+		  #'queue.bind_ok'{} ->
+			  ?INFO("Bind succeeded: ~p",
+					 [{ConsumeQueue, Exchange, RoutingKey}]);
+		  Return3 ->
+			  ?ERROR("Bind failed: ~p",
+					 [{ConsumeQueue, Exchange, RoutingKey, Return3}])
+	  end.
+
+declare_and_bind_outgoing_queues(Channel, Exchange, OutgoingQueues) ->
+	[	
+		{ #'queue.declare_ok'{} = amqp_channel:call(Channel, #'queue.declare'{queue = Queue}),
+		#'queue.bind_ok'{} = amqp_channel:call(Channel, #'queue.bind'{queue       = Queue,
+						        exchange    = Exchange,
+                      			routing_key = Key}) }
+	|| {Key, Queue} <- OutgoingQueues ].

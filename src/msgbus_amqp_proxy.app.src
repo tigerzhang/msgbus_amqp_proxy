@@ -16,18 +16,25 @@
 			      {amqp_user,   <<"guest">>},
 			      {amqp_pass,   <<"guest">>},
 			      {amqp_vhost,  <<"/">>},
-			      {amqp_host,   "localhost"},
-			      {amqp_port,   5672},
-			  	]},
+			      {amqp_host,   "10.211.55.3"},
+			      {amqp_port,   5672}
+			  	]}
+        		]},
 			{outgoing_queues, [
-		      	<<"1">>, <<"msgbus_mqtt_command">>,
-		      	<<"8">>, <<"msgbus_mqtt_command">>,
-		      	<<"12">>, <<"msgbus_mqtt_command">>
+		      	{<<"1">>, <<"msgbus_mqtt_command_connect">>},
+				{<<"3">>, <<"msgbus_mqtt_command_publish">>},
+				{<<"4">>, <<"msgbus_mqtt_command_puback">>},
+				{<<"5">>, <<"msgbus_mqtt_command_pubrec">>},
+				{<<"6">>, <<"msgbus_mqtt_command_pubrel">>},
+				{<<"7">>, <<"msgbus_mqtt_command_pubcomp">>},
+		      	{<<"8">>, <<"msgbus_mqtt_command_subscribe">>},
+				{<<"10">>, <<"msgbus_mqtt_command_unsubscribe">>},
+				{<<"12">>, <<"msgbus_mqtt_command_pingreq">>},
+		      	{<<"14">>, <<"msgbus_mqtt_command_disconnect">>}
 		      	]},
 	      	{incoming_queues, [
-	      		<<"msgbus_frentend_queue_">>
+	      		{<<"msgbus_frontend_key_">>, <<"msgbus_frontend_queue_">>}
 	      		]},
 	      	{node_tag, <<"front1">>}
-        	]}
   ]}
 ]}.

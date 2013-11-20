@@ -26,7 +26,8 @@
 
 %% Helper macro for declaring children of supervisor
 -define(CHILD(I, Type), {I, {I, start_link, []}, permanent, 5000, Type, [I]}).
--define(PROXYCHILD(Id, Param), {Id, {msgbus_amqp_proxy_client, start_link, [{Id,Param}]},
+-define(PROXYCHILD(Id, Param, Outgoing, Incoming, Tag), {Id,
+	{msgbus_amqp_proxy_client, start_link, [{Id,Param, Outgoing, Incoming, Tag}]},
 	permanent, 5000, worker, [msgbus_amqp_proxy_client]}).
 
 %% ===================================================================
@@ -40,9 +41,9 @@ start_link(Rabbitmqs) ->
 %% Supervisor callbacks
 %% ===================================================================
 
-init(Rabbitmqs) ->
+init({Rabbitmqs, OutgoingQueues, IncomingQueues, NodeTag}) ->
 	RestartStrategy = {one_for_one, 5, 10},
-	ChildSpecs = [ ?PROXYCHILD(AmqpId, AmqpParam)
+	ChildSpecs = [ ?PROXYCHILD(AmqpId, AmqpParam, OutgoingQueues, IncomingQueues, NodeTag)
 					|| {AmqpId, AmqpParam} <- Rabbitmqs ],
 
 	% io:format("ChildSpecs: ~p~n", [ChildSpecs]),

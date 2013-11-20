@@ -27,8 +27,11 @@
 
 start(_StartType, _StartArgs) ->
 	pg2:create(msgbus_amqp_clients),
-	{ok, Rabbitmqs} = application:get_env(msgbus_amqp_proxy, rabbitmqs),
-    msgbus_amqp_proxy_sup:start_link(Rabbitmqs).
+	{ok, Rabbitmqs} = application:get_env(rabbitmqs),
+	{ok, OutgoingQueues} = application:get_env(outgoing_queues),
+	{ok, IncomingQueues} = application:get_env(incoming_queues),
+	{ok, NodeTag} = application:get_env(node_tag),
+    msgbus_amqp_proxy_sup:start_link({Rabbitmqs, OutgoingQueues, IncomingQueues, NodeTag}).
 
 stop(_State) ->
     ok.
