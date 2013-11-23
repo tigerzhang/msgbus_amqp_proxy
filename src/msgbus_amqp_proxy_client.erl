@@ -73,7 +73,7 @@ init({Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
     port           = config_val(amqp_port, Params, 5672)
   },
 
-  io:format("Connecting to: ~p~n", [Name]),
+  ?INFO("Connecting to: ~p", [Name]),
   
   case amqp_channel(AmqpParams) of
     {ok, Channel} ->  
@@ -82,9 +82,9 @@ init({Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
       case amqp_channel:call(Channel,
         #'exchange.declare'{ exchange = Exchange, type = <<"topic">> }) of
         #'exchange.declare_ok'{} ->
-          io:format("declare exchange succeeded: ~p~n", [Exchange]);
+          ?INFO("declare exchange succeeded: ~p", [Exchange]);
         Return ->
-          io:format("declare exchange failed: ~p~n", [Return])
+          ?ERROR("declare exchange failed: ~p", [Return])
       end,
 
 	  % Subscribe incoming queues
@@ -94,10 +94,10 @@ init({Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
 	  
       pg2:join(msgbus_amqp_clients, self());
     Error ->
-
-      io:format("amqp_channel failed. will try again after 10s ~n"),
+	  Interval = 10,
+      ?ERROR("amqp_channel failed. will try again after ~p s", [Interval]),
       % exit the client after 10 seconds, let the supervisor recreate it
-      timer:exit_after(timer:seconds(10), "Connect failed"),
+      timer:exit_after(timer:seconds(Interval), "Connect failed"),
       Error
   end,
 
@@ -137,7 +137,7 @@ handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_info({'DOWN', Ref, Type, Pid, Info}, State) ->
-  io:format("DOWN: ~p~n", [{Ref, Type, Pid, Info}]),
+  ?INFO("DOWN: ~p", [{Ref, Type, Pid, Info}]),
 
   pg2:leave(msgbus_amqp_clients, self()),
 
@@ -191,7 +191,7 @@ config_val(C, Params, Default) ->
   case lists:keyfind(C, 1, Params) of
     {C, V} -> V;
     _ ->
-      io:format("Default: ~p~n", [Default]),
+      ?INFO("Default: ~p", [Default]),
       Default
   end.
 
@@ -239,7 +239,7 @@ subscribe_incoming_queues(Key, Queue, Exchange, Channel, NodeTag) ->
 										  self()),
 			?DEBUG("Tag: ~p", [Tag]);
 		  Return2 ->
-			  io:format("declare queue failed: ~p~n", [Return2])
+			  ?ERROR("declare queue failed: ~p", [Return2])
 	  end,
 	  
 	  KeyEnd = binary:last(Key),

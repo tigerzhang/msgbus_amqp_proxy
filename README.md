@@ -5,6 +5,8 @@ This is a proxy of rabbitmq.
 It connects to multiple rabbitmq brokers, and dispatch messages to them randomly
 leveraging pg2:get_closest_pid.
 
+This application is expected to be deployed in the same server with the client.
+
 ### Usage
 
 Include this proxy into your project using rebar:
