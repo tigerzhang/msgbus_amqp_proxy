@@ -16,7 +16,7 @@
 			      {amqp_user,   <<"guest">>},
 			      {amqp_pass,   <<"guest">>},
 			      {amqp_vhost,  <<"/">>},
-			      {amqp_host,   "10.211.55.3"},
+			      {amqp_host,   "localhost"},
 			      {amqp_port,   5672}
 			  	]}
         		]},

@@ -7,3 +7,5 @@ ebin
 erl_crash.dump
 
 Makefile.sublime-workspace
+
+.idea
