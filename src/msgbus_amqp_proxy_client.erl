@@ -233,14 +233,15 @@ maybe_new_pid(Group, StartFun) ->
   end.
 
 subscribe_incoming_queues(Key, Queue, Exchange, Channel, NodeTag) ->
-  case binary:last(Queue) of
-    $_ ->
-      ConsumeQueue = <<Queue/binary, NodeTag/binary>>;
-    _ ->
-      ConsumeQueue = Queue
-  end,
+    ConsumeQueue =
+        case binary:last(Queue) of
+            $_ ->
+                <<Queue/binary, NodeTag/binary>>;
+            _ ->
+                Queue
+        end,
 
-  case amqp_channel:call(Channel, #'queue.declare'{queue = ConsumeQueue}) of
+    case amqp_channel:call(Channel, #'queue.declare'{queue = ConsumeQueue}) of
     #'queue.declare_ok'{} ->
       Tag = amqp_channel:subscribe(Channel,
         #'basic.consume'{queue = ConsumeQueue,
