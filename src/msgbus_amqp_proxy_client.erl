@@ -167,7 +167,7 @@ handle_info({#'basic.deliver'{consumer_tag = CTag,
 %%   "~nContent: ~p"
 %%   "~n",
 %%     [CTag, DeliveryTag, Exch, RK, Content]),
-  ?INFO("Data: ~p", [Data]),
+%%   ?INFO("Data: ~p", [Data]),
     %% fixme
     gen_server:cast(emqtt_registry, {package_from_mq, Data}),
   {noreply, State#state{package_recv_count = Recv + 1}};
