@@ -28,8 +28,9 @@
   level,
   exchange,
   params,
-    package_sent_count,
-    package_recv_count
+    amqp_package_sent_count,
+    amqp_package_recv_count,
+    receiver_module
 }).
 
 %% ------------------------------------------------------------------
@@ -55,6 +56,9 @@ start_link() ->
 start_link({Id, Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
   gen_server:start_link({local, Id}, ?MODULE, {Params, OutgoingQueues, IncomingQueues, NodeTag}, []).
 
+receiver_module_name(Receiver) ->
+    Receiver.
+
 %% ------------------------------------------------------------------
 %% gen_server Function Definitions
 %% ------------------------------------------------------------------
@@ -62,6 +66,7 @@ start_link({Id, Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
 init({Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
 
   % io:format("Params: ~p~n", [Params]),
+    {ok, Receiver} = application:get_env(receiver_module),
 
   Name = config_val(name, Params, ?MODULE),
   Level = config_val(level, Params, debug),
@@ -108,16 +113,17 @@ init({Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
     level = Level,
     exchange = Exchange,
     params = AmqpParams,
-    package_sent_count = 0,
-    package_recv_count = 0
+    amqp_package_sent_count = 0,
+    amqp_package_recv_count = 0,
+    receiver_module = receiver_module_name(Receiver)
   }}.
 
 handle_call({forward_to_amqp, RoutingKey, Message}, _From,
-    #state{params = AmqpParams, exchange = Exchange, package_sent_count = Sent} = State) ->
+    #state{params = AmqpParams, exchange = Exchange, amqp_package_sent_count = Sent} = State) ->
   State2 = case amqp_channel(AmqpParams) of
     {ok, Channel} ->
       amqp_publish(Exchange, RoutingKey, Message, Channel, State),
-        State#state{package_sent_count = Sent + 1};
+        State#state{amqp_package_sent_count = Sent + 1};
     _ ->
       State
   end,
@@ -159,7 +165,8 @@ handle_info({#'basic.deliver'{consumer_tag = CTag,
   exchange = Exch,
   routing_key = RK},
   #amqp_msg{payload = Data} = Content},
-    #state{package_recv_count = Recv} = State) ->
+    #state{amqp_package_recv_count = Recv,
+        receiver_module = ReceiverModule} = State) ->
 %%   ?INFO("ConsumerTag: ~p"
 %%   "~nDeliveryTag: ~p"
 %%   "~nExchange: ~p"
@@ -169,8 +176,8 @@ handle_info({#'basic.deliver'{consumer_tag = CTag,
 %%     [CTag, DeliveryTag, Exch, RK, Content]),
 %%   ?INFO("Data: ~p", [Data]),
     %% fixme
-    gen_server:cast(emqtt_registry, {package_from_mq, Data}),
-  {noreply, State#state{package_recv_count = Recv + 1}};
+    gen_server:cast(ReceiverModule, {package_from_mq, Data}),
+  {noreply, State#state{amqp_package_recv_count = Recv + 1}};
 handle_info(_Info, State) ->
   {noreply, State}.
 
