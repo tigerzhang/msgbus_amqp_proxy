@@ -26,6 +26,8 @@
 -record(state, {
   name,
   level,
+    connection,
+    channel,
   exchange,
   params,
     amqp_package_sent_count,
@@ -37,7 +39,7 @@
 %% API Function Exports
 %% ------------------------------------------------------------------
 
--export([start_link/0, start_link/1, test/0]).
+-export([start_link/0, start_link/1, test/0, close/1]).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Exports
@@ -58,6 +60,9 @@ start_link({Id, Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
 
 receiver_module_name(Receiver) ->
     Receiver.
+
+close(Id) ->
+    gen_server:call(Id, close).
 
 %% ------------------------------------------------------------------
 %% gen_server Function Definitions
@@ -82,8 +87,9 @@ init({Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
 
   ?INFO("Connecting to: ~p", [Name]),
 
+    {Connection2, Channel2} =
   case amqp_channel(AmqpParams) of
-    {ok, Channel} ->
+    {ok, Connection, Channel} ->
 
       % declare exchange
       case amqp_channel:call(Channel,
@@ -99,18 +105,21 @@ init({Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
 
       declare_and_bind_outgoing_queues(Channel, Exchange, OutgoingQueues),
 
-      pg2:join(msgbus_amqp_clients, self());
+      pg2:join(msgbus_amqp_clients, self()),
+        {Connection, Channel};
     Error ->
       Interval = 10,
       ?ERROR("amqp_channel failed. will try again after ~p s", [Interval]),
       % exit the client after 10 seconds, let the supervisor recreate it
       timer:exit_after(timer:seconds(Interval), "Connect failed"),
-      Error
+        {undefined, undefined}
   end,
 
   {ok, #state{
     name = Name,
     level = Level,
+  connection = Connection2,
+  channel = Channel2,
     exchange = Exchange,
     params = AmqpParams,
     amqp_package_sent_count = 0,
@@ -118,12 +127,19 @@ init({Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
     receiver_module = receiver_module_name(Receiver)
   }}.
 
+handle_call(close, _From, #state{connection = Connection, channel = Channel} = State) ->
+    ?DEBUG("~p", [<<"close channel">>]),
+    amqp_channel:close(Channel),
+    ?DEBUG("~p", [<<"close connection">>]),
+    amqp_connection:close(Connection),
+    {reply, ok, State};
+
 handle_call({forward_to_amqp, RoutingKey, Message}, _From,
     #state{params = AmqpParams, exchange = Exchange, amqp_package_sent_count = Sent} = State) ->
   State2 = case amqp_channel(AmqpParams) of
-    {ok, Channel} ->
+    {ok, Connection, Channel} ->
       amqp_publish(Exchange, RoutingKey, Message, Channel, State),
-        State#state{amqp_package_sent_count = Sent + 1};
+        State#state{amqp_package_sent_count = Sent + 1, connection = Connection, channel = Channel};
     _ ->
       State
   end,
@@ -131,7 +147,7 @@ handle_call({forward_to_amqp, RoutingKey, Message}, _From,
 
 handle_call({declare_bind, RoutingKey, Queue}, _From, #state{params = AmqpParams, exchange = Exchange} = State) ->
   case amqp_channel(AmqpParams) of
-    {ok, Channel} ->
+    {ok, _Connection, Channel} ->
       #'queue.declare_ok'{} = amqp_channel:call(Channel, #'queue.declare'{queue = Queue}),
       Binding = #'queue.bind'{queue = Queue,
       exchange = Exchange,
@@ -182,6 +198,7 @@ handle_info(_Info, State) ->
   {noreply, State}.
 
 terminate(_Reason, _State) ->
+    ?DEBUG("~p", ["proxy client terminated"]),
   ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -215,8 +232,13 @@ amqp_channel(AmqpParams) ->
   case maybe_new_pid({AmqpParams, connection},
     fun() -> amqp_connection:start(AmqpParams) end) of
     {ok, Client} ->
-      maybe_new_pid({AmqpParams, channel},
-        fun() -> amqp_connection:open_channel(Client) end);
+      case maybe_new_pid({AmqpParams, channel},
+        fun() -> amqp_connection:open_channel(Client) end) of
+          {ok, Channel} ->
+              {ok, Client, Channel};
+          Error2 ->
+              Error2
+      end;
     Error ->
       Error
   end.
@@ -260,14 +282,15 @@ subscribe_incoming_queues(Key, Queue, Exchange, Channel, NodeTag) ->
   end,
 
   KeyEnd = binary:last(Key),
-  case KeyEnd of
-    $_ ->
-      RoutingKey = <<Key/binary, NodeTag/binary>>;
-    _ ->
-      RoutingKey = Key
-  end,
+    RoutingKey =
+        case KeyEnd of
+            $_ ->
+                <<Key/binary, NodeTag/binary>>;
+            _ ->
+                Key
+        end,
 
-  Binding = #'queue.bind'{queue = ConsumeQueue,
+    Binding = #'queue.bind'{queue = ConsumeQueue,
   exchange = Exchange,
   routing_key = RoutingKey},
   case amqp_channel:call(Channel, Binding) of
