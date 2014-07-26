@@ -214,7 +214,7 @@ test() ->
 
 amqp_publish(Exchange, RoutingKey, Message, Channel, State) ->
   Publish = #'basic.publish'{exchange = Exchange, routing_key = RoutingKey},
-  Props = #'P_basic'{content_type = <<"application/octet-stream">>},
+  Props = #'P_basic'{content_type = <<"application/octet-stream">>, expiration = <<"8000">>},
   Msg = #amqp_msg{payload = Message, props = Props},
   amqp_channel:cast(Channel, Publish, Msg),
 
