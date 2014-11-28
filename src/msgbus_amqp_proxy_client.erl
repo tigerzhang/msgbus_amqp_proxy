@@ -24,6 +24,8 @@
 -include_lib("elog/include/elog.hrl").
 
 -record(state, {
+    tref,
+    is_unsubscribe,
     name,
     level,
     connection,
@@ -33,6 +35,7 @@
     amqp_package_sent_count,
     amqp_package_recv_count,
     receiver_module,
+    receiver_msg_queue_len,
     queue_info
 }).
 
@@ -76,6 +79,7 @@ init({Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
 
     % io:format("Params: ~p~n", [Params]),
     {ok, Receiver} = application:get_env(receiver_module),
+    {ok, MsgQueueLen} = application:get_env(receiver_msg_queue_len),
 
     Name = config_val(name, Params, ?MODULE),
     Level = config_val(level, Params, debug),
@@ -128,14 +132,19 @@ init({Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
         exchange = Exchange,
         params = AmqpParams,
         amqp_package_sent_count = 0,
+        is_unsubscribe = false,
         amqp_package_recv_count = 0,
         receiver_module = receiver_module_name(Receiver),
+        receiver_msg_queue_len = MsgQueueLen,
         queue_info = QueueInfo
     }}.
 
 handle_call(unsubscribe, _From,  #state{channel = Channel, queue_info = QueueInfo} = State) ->
     unsubscribe_incomming_queues(Channel, QueueInfo),
     {reply, ok, State};
+
+handle_call({set_msgq_len, Len}, _From, State=#state{receiver_msg_queue_len = MsgQueueLen}) ->
+    {reply, ok, State#state{receiver_msg_queue_len = Len}};
 
 handle_call(close, _From, #state{connection = Connection, channel = Channel} = State) ->
     ?DEBUG("~p", [<<"close channel">>]),
@@ -192,6 +201,10 @@ handle_info({#'basic.deliver'{consumer_tag = CTag,
     routing_key = RK},
     #amqp_msg{payload = Data} = Content},
     #state{amqp_package_recv_count = Recv,
+        channel = Channel,
+        queue_info = QueueInfo,
+        receiver_msg_queue_len = MsgQueueLen,
+        is_unsubscribe = IsUnsubscribe,
         receiver_module = ReceiverModule} = State) ->
 %%   ?INFO("ConsumerTag: ~p"
 %%   "~nDeliveryTag: ~p"
@@ -202,8 +215,42 @@ handle_info({#'basic.deliver'{consumer_tag = CTag,
 %%     [CTag, DeliveryTag, Exch, RK, Content]),
 %%   ?INFO("Data: ~p", [Data]),
     %% fixme
-    gen_server:call(ReceiverModule, {package_from_mq, Data}),
-    {noreply, State#state{amqp_package_recv_count = Recv + 1}};
+
+    Pid = whereis(ReceiverModule),
+    {message_queue_len, Len} = erlang:process_info(Pid, message_queue_len),
+    ?DEBUG("QueueLen ~p, config ~p", [Len, MsgQueueLen]),
+    State2 = case Len > MsgQueueLen of
+        true ->
+            case IsUnsubscribe of
+                false ->
+                    ?CRITICAL("msgq length ~p > config leng ~p", [Len, MsgQueueLen]),
+                    TRef = erlang:start_timer(5000, self(), triger),
+                    unsubscribe_incomming_queues(Channel, QueueInfo),
+                    ?WARN_MSG("Pause Consumer"),
+                    State#state{tref = TRef, is_unsubscribe = true};
+                _ ->
+                    State
+            end;
+        _ ->
+            State
+    end,
+    gen_server:cast(ReceiverModule, {package_from_mq, Data}),
+    {noreply,State2#state{amqp_package_recv_count = Recv + 1}};
+
+handle_info({timeout, _Ref, _}, #state{channel = Channel, queue_info = QueueInfo} = State) ->
+    erlang:cancel_timer(State#state.tref),
+    NewQueueInfo = [
+        {
+            ConsumeQueue,
+            amqp_channel:subscribe(Channel,
+                                   #'basic.consume'{queue = ConsumeQueue,
+                                                    consumer_tag = ConsumerTag,
+                                                    no_ack = true},
+                                   self())
+        }  || {ConsumeQueue, {_, ConsumerTag}} <- QueueInfo],
+    ?WARN("Resume Consumer \n old info ~p \n new info ~p", [QueueInfo, NewQueueInfo]),
+    {noreply, State#state{is_unsubscribe = false, queue_info=NewQueueInfo}};
+
 handle_info(_Info, State) ->
     {noreply, State}.
 
