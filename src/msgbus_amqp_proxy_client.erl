@@ -261,8 +261,9 @@ handle_info({timeout, _Ref, _}, #state{channel = Channel, queue_info = QueueInfo
 handle_info(_Info, State) ->
     {noreply, State}.
 
-terminate(_Reason, _State) ->
-    ?DEBUG("~p: ~p", ["proxy client terminated", _Reason]),
+terminate(Reason, _State=#state{channel=Channel, queue_info = QueueInfo}) ->
+    unsubscribe_incomming_queues(Channel, QueueInfo),
+    ?DEBUG("proxy client terminated ~p", [Reason]),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
