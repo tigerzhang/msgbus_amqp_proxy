@@ -217,25 +217,32 @@ handle_info({#'basic.deliver'{consumer_tag = CTag,
     %% fixme
 
     Pid = whereis(ReceiverModule),
-    {message_queue_len, Len} = erlang:process_info(Pid, message_queue_len),
-    ?DEBUG("QueueLen ~p, config ~p", [Len, MsgQueueLen]),
-    State2 = case Len > MsgQueueLen of
-        true ->
-            case IsUnsubscribe of
-                false ->
-                    ?CRITICAL("msgq length ~p > config leng ~p", [Len, MsgQueueLen]),
-                    TRef = erlang:start_timer(5000, self(), triger),
-                    unsubscribe_incomming_queues(Channel, QueueInfo),
-                    ?WARN_MSG("Pause Consumer"),
-                    State#state{tref = TRef, is_unsubscribe = true};
-                _ ->
-                    State
-            end;
-        _ ->
-            State
-    end,
+    State3 = case Pid of
+                 undefined ->
+                     ?WARN("No Pid for ~p", [ReceiverModule]),
+                     State;
+                 _ ->
+                     {message_queue_len, Len} = erlang:process_info(Pid, message_queue_len),
+                     ?DEBUG("QueueLen ~p, config ~p", [Len, MsgQueueLen]),
+                     State2 = case Len > MsgQueueLen of
+                                  true ->
+                                      case IsUnsubscribe of
+                                          false ->
+                                              ?CRITICAL("msgq length ~p > config leng ~p", [Len, MsgQueueLen]),
+                                              TRef = erlang:start_timer(5000, self(), triger),
+                                              unsubscribe_incomming_queues(Channel, QueueInfo),
+                                              ?WARN_MSG("Pause Consumer"),
+                                              State#state{tref = TRef, is_unsubscribe = true};
+                                          _ ->
+                                              State
+                                      end;
+                                  _ ->
+                                      State
+                              end,
+                     State2
+             end,
     gen_server:cast(ReceiverModule, {package_from_mq, Data}),
-    {noreply,State2#state{amqp_package_recv_count = Recv + 1}};
+    {noreply,State3#state{amqp_package_recv_count = Recv + 1}};
 
 handle_info({timeout, _Ref, _}, #state{channel = Channel, queue_info = QueueInfo} = State) ->
     erlang:cancel_timer(State#state.tref),
@@ -255,7 +262,7 @@ handle_info(_Info, State) ->
     {noreply, State}.
 
 terminate(_Reason, _State) ->
-    ?DEBUG("~p", ["proxy client terminated"]),
+    ?DEBUG("~p: ~p", ["proxy client terminated", _Reason]),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -323,8 +330,8 @@ unsubscribe_incomming_queues(Channel, QueueInfo) ->
         case Info of
             {Queue, {'basic.consume_ok', ConsumerTag}} ->
                 Method = #'basic.cancel'{consumer_tag = ConsumerTag},
-                amqp_channel:call(Channel, Method),
-                ?DEBUG("Unsubscribe queue succee ~p", [Queue]);
+                Result = amqp_channel:call(Channel, Method),
+                ?DEBUG("Unsubscribe queue succee ~p Result ~p", [Queue, Result]);
             {Queue, {Other, _ComsumerTag}} ->
                 ?DEBUG("Queue does not consumer ~p, ~p", [Queue, Other])
         end
