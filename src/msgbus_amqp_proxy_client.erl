@@ -199,7 +199,7 @@ handle_info({#'basic.deliver'{consumer_tag = CTag,
     delivery_tag = DeliveryTag,
     exchange = Exch,
     routing_key = RK},
-    #amqp_msg{payload = Data} = Content},
+    #amqp_msg{payload = Data} = Content} = AmqpPackage,
     #state{amqp_package_recv_count = Recv,
         channel = Channel,
         queue_info = QueueInfo,
@@ -218,8 +218,9 @@ handle_info({#'basic.deliver'{consumer_tag = CTag,
 
     Pid = whereis(ReceiverModule),
     State3 = case Pid of
-                 undefined ->
+                 undefined ->   %% waiting for ReceiverModule come up, should use timer:sleep()?
                      ?WARN("No Pid for ~p", [ReceiverModule]),
+                     self() ! AmqpPackage,
                      State;
                  _ ->
                      {message_queue_len, Len} = erlang:process_info(Pid, message_queue_len),
