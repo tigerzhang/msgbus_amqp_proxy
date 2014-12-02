@@ -202,7 +202,7 @@ handle_info({#'basic.deliver'{consumer_tag = CTag,
 %%     [CTag, DeliveryTag, Exch, RK, Content]),
 %%   ?INFO("Data: ~p", [Data]),
     %% fixme
-    gen_server:call(ReceiverModule, {package_from_mq, Data}),
+    gen_server:cast(ReceiverModule, {package_from_mq, Data}),
     {noreply, State#state{amqp_package_recv_count = Recv + 1}};
 handle_info(_Info, State) ->
     {noreply, State}.
