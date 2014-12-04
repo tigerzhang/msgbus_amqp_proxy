@@ -35,6 +35,7 @@
     amqp_package_sent_count,
     amqp_package_recv_count,
     receiver_module,
+    stat_module,
     receiver_msg_queue_len,
     queue_info
 }).
@@ -79,6 +80,12 @@ init({Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
 
     % io:format("Params: ~p~n", [Params]),
     {ok, Receiver} = application:get_env(receiver_module),
+    Stat = case application:get_env(stat_module) of
+               {ok, StatModule} ->
+                   StatModule;
+               Else ->
+                   Else
+           end,
     {ok, MsgQueueLen} = application:get_env(receiver_msg_queue_len),
 
     Name = config_val(name, Params, ?MODULE),
@@ -135,6 +142,7 @@ init({Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
         is_unsubscribe = false,
         amqp_package_recv_count = 0,
         receiver_module = receiver_module_name(Receiver),
+        stat_module = receiver_module_name(Stat),
         receiver_msg_queue_len = MsgQueueLen,
         queue_info = QueueInfo
     }}.
@@ -205,6 +213,7 @@ handle_info({#'basic.deliver'{consumer_tag = CTag,
         queue_info = QueueInfo,
         receiver_msg_queue_len = MsgQueueLen,
         is_unsubscribe = IsUnsubscribe,
+        stat_module = StatModule,
         receiver_module = ReceiverModule} = State) ->
 %%   ?INFO("ConsumerTag: ~p"
 %%   "~nDeliveryTag: ~p"
@@ -243,6 +252,12 @@ handle_info({#'basic.deliver'{consumer_tag = CTag,
                      State2
              end,
     gen_server:cast(ReceiverModule, {package_from_mq, Data}),
+    case StatModule of
+        undefined ->
+            ignore;
+        _ ->
+            StatModule:notify({mqtt_mq_recv, {inc, 1}})  %% current use folsom
+    end,
     {noreply,State3#state{amqp_package_recv_count = Recv + 1}};
 
 handle_info({timeout, _Ref, _}, #state{channel = Channel, queue_info = QueueInfo} = State) ->
