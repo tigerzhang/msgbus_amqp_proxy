@@ -26,13 +26,19 @@ declare_bind(RoutingKey, Queue) ->
 	ok.
 
 send(RoutingKey, Message) ->
-	case pg2:get_closest_pid(msgbus_amqp_clients) of
-		{error, Reason} ->
-			{error, Reason};
-		Pid ->
-			gen_server:call(Pid, {forward_to_amqp, RoutingKey, Message}),
-			ok
-	end.
+  case ets:last(msgbus_amqp_clients_priority_table) of
+    '$end_of_table' ->
+      {error, <<"all msgbus_amqp_clients are unavailable">>};
+    Key ->
+      GroupName = ets:lookup_element(msgbus_amqp_clients_priority_table, Key, 2),
+      case pg2:get_closest_pid(GroupName) of
+        {error, Reason} ->
+          {error, Reason};
+        Pid ->
+          gen_server:call(Pid, {forward_to_amqp, RoutingKey, Message}),
+          ok
+      end
+  end.
 	
 send_test() ->
 	RoutingKey = <<"route">>,

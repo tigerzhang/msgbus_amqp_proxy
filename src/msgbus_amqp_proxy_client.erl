@@ -33,7 +33,8 @@
     amqp_package_sent_count,
     amqp_package_recv_count,
     receiver_module,
-    queue_info
+    queue_info,
+    priority
 }).
 
 %% ------------------------------------------------------------------
@@ -80,6 +81,7 @@ init({Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
     Name = config_val(name, Params, ?MODULE),
     Level = config_val(level, Params, debug),
     Exchange = config_val(exchange, Params, list_to_binary(atom_to_list(?MODULE))),
+    Priority = config_val(priority, Params, 0),
 
     AmqpParams = #amqp_params_network{
         username = config_val(amqp_user, Params, <<"guest">>),
@@ -110,7 +112,16 @@ init({Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
 
                 declare_and_bind_outgoing_queues(Channel, Exchange, OutgoingQueues),
 
-                pg2:join(msgbus_amqp_clients, self()),
+                GroupName = "msgbus_amqp_clients_" ++ integer_to_list(Priority),
+                case pg2:get_members(GroupName) of
+                    {error, {no_such_group, GroupName}} ->
+                        true = ets:insert_new(msgbus_amqp_clients_priority_table, {Priority, GroupName}),
+                        pg2:create(GroupName);
+                    _ ->
+                        ignore
+                end,
+                pg2:join(GroupName, self()),
+
                 {Connection, Channel, SubscribeInfo};
             Error ->
                 Interval = 10,
@@ -130,7 +141,8 @@ init({Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
         amqp_package_sent_count = 0,
         amqp_package_recv_count = 0,
         receiver_module = receiver_module_name(Receiver),
-        queue_info = QueueInfo
+        queue_info = QueueInfo,
+        priority = Priority
     }}.
 
 handle_call(unsubscribe, _From,  #state{channel = Channel, queue_info = QueueInfo} = State) ->
@@ -174,10 +186,18 @@ handle_call(_Request, _From, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info({'DOWN', Ref, Type, Pid, Info}, State) ->
+handle_info({'DOWN', Ref, Type, Pid, Info}, State = #state{priority = Priority}) ->
     ?INFO("DOWN: ~p", [{Ref, Type, Pid, Info}]),
 
-    pg2:leave(msgbus_amqp_clients, self()),
+    GroupName = "msgbus_amqp_clients_" ++ integer_to_list(Priority),
+    MyPid = self(),
+    case pg2:get_members(GroupName) of
+        [MyPid] ->
+            ets:match_delete(msgbus_amqp_clients_priority_table, {'_', GroupName}),
+            pg2:delete(GroupName);
+        _ ->
+            pg2:leave(GroupName, self())
+    end,
 
     % exit the client after 10 seconds, let the supervisor recreate it
     timer:exit_after(timer:seconds(10), "Connection closed"),

@@ -21,6 +21,7 @@ You can pass the proxy the following configuration:
         {msgbus_rabbitmq_local, [
             {name, "msgbus_rabbitmq_local"},
             {exchange, <<"msgbus_amqp_proxy">>},
+            {priority, 1},
             {amqp_user, <<"guest">>},
             {amqp_pass, <<"guest">>},
             {amqp_vhost, <<"/">>},
