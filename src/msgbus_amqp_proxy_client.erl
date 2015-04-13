@@ -37,6 +37,7 @@
     receiver_module,
     stat_module,
     receiver_msg_queue_len,
+    consume_msg_rate,  %% the rate of consumer per second
     queue_info
 }).
 
@@ -87,6 +88,7 @@ init({Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
                    Else
            end,
     {ok, MsgQueueLen} = application:get_env(receiver_msg_queue_len),
+    MsgRate = application:get_env(msgbus_amqp_proxy, consume_msg_rate, 500),
 
     Name = config_val(name, Params, ?MODULE),
     Level = config_val(level, Params, debug),
@@ -144,6 +146,7 @@ init({Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
         receiver_module = receiver_module_name(Receiver),
         stat_module = receiver_module_name(Stat),
         receiver_msg_queue_len = MsgQueueLen,
+        consume_msg_rate = MsgRate,
         queue_info = QueueInfo
     }}.
 
@@ -212,6 +215,7 @@ handle_info({#'basic.deliver'{consumer_tag = CTag,
         channel = Channel,
         queue_info = QueueInfo,
         receiver_msg_queue_len = MsgQueueLen,
+        consume_msg_rate = MsgRate,
         is_unsubscribe = IsUnsubscribe,
         stat_module = StatModule,
         receiver_module = ReceiverModule} = State) ->
@@ -239,7 +243,7 @@ handle_info({#'basic.deliver'{consumer_tag = CTag,
                                       case IsUnsubscribe of
                                           false ->
                                               ?CRITICAL("msgq length ~p > config leng ~p", [Len, MsgQueueLen]),
-                                              TRef = erlang:start_timer(5000, self(), triger),
+                                              TRef = start_timer(Len, MsgQueueLen, MsgRate, resume),
                                               unsubscribe_incomming_queues(Channel, QueueInfo),
                                               ?WARN_MSG("Pause Consumer"),
                                               State#state{tref = TRef, is_unsubscribe = true};
@@ -260,19 +264,33 @@ handle_info({#'basic.deliver'{consumer_tag = CTag,
     end,
     {noreply,State3#state{amqp_package_recv_count = Recv + 1}};
 
-handle_info({timeout, _Ref, _}, #state{channel = Channel, queue_info = QueueInfo} = State) ->
+handle_info({timeout, _Ref, resume}, #state{channel = Channel,
+    receiver_msg_queue_len = MsgQueueLen,
+    queue_info = QueueInfo,
+    consume_msg_rate = Rate,
+    receiver_module = ReceiverModule} = State) ->
     erlang:cancel_timer(State#state.tref),
-    NewQueueInfo = [
-        {
-            ConsumeQueue,
-            amqp_channel:subscribe(Channel,
-                                   #'basic.consume'{queue = ConsumeQueue,
-                                                    consumer_tag = ConsumerTag,
-                                                    no_ack = true},
-                                   self())
-        }  || {ConsumeQueue, {_, ConsumerTag}} <- QueueInfo],
-    ?WARN("Resume Consumer \n old info ~p \n new info ~p", [QueueInfo, NewQueueInfo]),
-    {noreply, State#state{is_unsubscribe = false, queue_info=NewQueueInfo}};
+    Pid = whereis(ReceiverModule),
+    {message_queue_len, Len} = erlang:process_info(Pid, message_queue_len),
+    ?DEBUG("Check before resume: QueueLen ~p, config ~p", [Len, MsgQueueLen]),
+    State2 = case Len > MsgQueueLen of
+                 true ->
+                     TRef = start_timer(Len, MsgQueueLen, Rate, resume),
+                     State#state{tref = TRef};
+                 _ ->
+                     NewQueueInfo = [
+                         {
+                             ConsumeQueue,
+                             amqp_channel:subscribe(Channel,
+                                 #'basic.consume'{queue = ConsumeQueue,
+                                     consumer_tag = ConsumerTag,
+                                     no_ack = true},
+                                 self())
+                         }  || {ConsumeQueue, {_, ConsumerTag}} <- QueueInfo],
+                     ?WARN("Resume Consumer \n old info ~p \n new info ~p", [QueueInfo, NewQueueInfo]),
+                     State#state{is_unsubscribe = false, queue_info=NewQueueInfo}
+             end,
+    {noreply, State2};
 
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -405,3 +423,18 @@ declare_and_bind_outgoing_queues(Channel, Exchange, OutgoingQueues) ->
                 exchange = Exchange,
                 routing_key = Key})}
         || {Key, Queue} <- OutgoingQueues].
+
+start_timer(MsgQLen, Threshold, Rate, Msg) ->
+    Timeout = case (MsgQLen - Threshold) / Rate of
+                  Count when Count < 5 ->
+                      5000;
+                  Count when Count > 20 ->
+                      20000;
+                  Count ->
+                      round(Count) * 1000
+              end,
+
+    ?DEBUG("Start pause consumer ~p seconds", [Timeout]),
+    TRef = erlang:start_timer(Timeout, self(), Msg),
+    TRef.
+
