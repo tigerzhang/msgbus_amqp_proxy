@@ -253,16 +253,16 @@ handle_info({#'basic.deliver'{consumer_tag = CTag,
                                   _ ->
                                       State
                               end,
-                     State2
+                     gen_server:cast(ReceiverModule, {package_from_mq, Data}),
+                     case StatModule of
+                         undefined ->
+                             ignore;
+                         _ ->
+                             StatModule:notify({mqtt_mq_recv, {inc, 1}})  %% current use folsom
+                     end,
+                     State2#state{amqp_package_recv_count = Recv + 1}
              end,
-    gen_server:cast(ReceiverModule, {package_from_mq, Data}),
-    case StatModule of
-        undefined ->
-            ignore;
-        _ ->
-            StatModule:notify({mqtt_mq_recv, {inc, 1}})  %% current use folsom
-    end,
-    {noreply,State3#state{amqp_package_recv_count = Recv + 1}};
+    {noreply,State3};
 
 handle_info({timeout, _Ref, resume}, #state{channel = Channel,
     receiver_msg_queue_len = MsgQueueLen,
