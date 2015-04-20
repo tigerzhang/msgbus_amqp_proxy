@@ -36,8 +36,10 @@
     amqp_package_recv_count,
     receiver_module,
     stat_module,
-    receiver_msg_queue_len,
-    consume_msg_rate,  %% the rate of consumer per second
+    consumer_stat,
+    consumer_last_stat,
+    consumer_check_interval,
+    consumer_msg_rate,  %% the rate of consumer per second
     queue_info
 }).
 
@@ -87,8 +89,9 @@ init({Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
                Else ->
                    Else
            end,
-    {ok, MsgQueueLen} = application:get_env(receiver_msg_queue_len),
-    MsgRate = application:get_env(msgbus_amqp_proxy, consume_msg_rate, 500),
+    ConsumerStat = application:get_env(msgbus_amqp_proxy, consumer_stat, {undefined, undefined}),
+    ConsumerCheckInterval = application:get_env(msgbus_amqp_proxy, consumer_check_interval, 2),
+    MsgRate = application:get_env(msgbus_amqp_proxy, consumer_msg_rate, 500),
 
     Name = config_val(name, Params, ?MODULE),
     Level = config_val(level, Params, debug),
@@ -133,9 +136,17 @@ init({Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
                 {undefined, undefined, []}
         end,
 
+    ConsumerLastStat = case ConsumerStat of
+                           {undefined, _} ->
+                               0;
+                           {Mod, Fn} ->
+                               Mod:Fn()
+    end,
+    TRef = erlang:start_timer(ConsumerCheckInterval * 1000, self(), check_consumer),
     {ok, #state{
         name = Name,
         level = Level,
+        tref = TRef,
         connection = Connection2,
         channel = Channel2,
         exchange = Exchange,
@@ -145,17 +156,16 @@ init({Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
         amqp_package_recv_count = 0,
         receiver_module = receiver_module_name(Receiver),
         stat_module = receiver_module_name(Stat),
-        receiver_msg_queue_len = MsgQueueLen,
-        consume_msg_rate = MsgRate,
+        consumer_last_stat = ConsumerLastStat,
+        consumer_check_interval = ConsumerCheckInterval,
+        consumer_msg_rate = MsgRate,
+        consumer_stat = ConsumerStat,
         queue_info = QueueInfo
     }}.
 
 handle_call(unsubscribe, _From,  #state{channel = Channel, queue_info = QueueInfo} = State) ->
     unsubscribe_incomming_queues(Channel, QueueInfo),
     {reply, ok, State};
-
-handle_call({set_msgq_len, Len}, _From, State=#state{receiver_msg_queue_len = MsgQueueLen}) ->
-    {reply, ok, State#state{receiver_msg_queue_len = Len}};
 
 handle_call(close, _From, #state{connection = Connection, channel = Channel} = State) ->
     ?DEBUG("~p", [<<"close channel">>]),
@@ -214,8 +224,8 @@ handle_info({#'basic.deliver'{consumer_tag = CTag,
     #state{amqp_package_recv_count = Recv,
         channel = Channel,
         queue_info = QueueInfo,
-        receiver_msg_queue_len = MsgQueueLen,
-        consume_msg_rate = MsgRate,
+        consumer_check_interval = ConsumerCheckInterval,
+        consumer_msg_rate = MsgRate,
         is_unsubscribe = IsUnsubscribe,
         stat_module = StatModule,
         receiver_module = ReceiverModule} = State) ->
@@ -237,19 +247,14 @@ handle_info({#'basic.deliver'{consumer_tag = CTag,
                      State;
                  _ ->
                      {message_queue_len, Len} = erlang:process_info(Pid, message_queue_len),
-                     ?DEBUG("QueueLen ~p, config ~p", [Len, MsgQueueLen]),
-                     State2 = case Len > MsgQueueLen of
-                                  true ->
-                                      case IsUnsubscribe of
-                                          false ->
-                                              ?CRITICAL("msgq length ~p > config leng ~p", [Len, MsgQueueLen]),
-                                              TRef = start_timer(Len, MsgQueueLen, MsgRate, resume),
-                                              unsubscribe_incomming_queues(Channel, QueueInfo),
-                                              ?WARN_MSG("Pause Consumer"),
-                                              State#state{tref = TRef, is_unsubscribe = true};
-                                          _ ->
-                                              State
-                                      end;
+                     ConsumeMsgLen = ConsumerCheckInterval * MsgRate,
+                     ?DEBUG("QueueLen ~p, config ~p", [Len, ConsumeMsgLen]),
+                     State2 = case {Len > ConsumeMsgLen, IsUnsubscribe} of
+                                  {true, false} ->
+                                      ?CRITICAL("msgq length ~p > config leng ~p", [Len, ConsumeMsgLen]),
+                                      unsubscribe_incomming_queues(Channel, QueueInfo),
+                                      ?WARN_MSG("Pause Consumer"),
+                                      State#state{is_unsubscribe = true};
                                   _ ->
                                       State
                               end,
@@ -264,20 +269,43 @@ handle_info({#'basic.deliver'{consumer_tag = CTag,
              end,
     {noreply,State3};
 
-handle_info({timeout, _Ref, resume}, #state{channel = Channel,
-    receiver_msg_queue_len = MsgQueueLen,
+handle_info({timeout, _Ref, check_consumer}, #state{channel = Channel,
+    consumer_check_interval = ConsumerCheckInterval,
+    consumer_msg_rate = Rate,
+    consumer_last_stat = ConsumerLastStat,
+    consumer_stat = ConsumerStat,
+    is_unsubscribe = IsUnsubscribe,
     queue_info = QueueInfo,
-    consume_msg_rate = Rate,
     receiver_module = ReceiverModule} = State) ->
     erlang:cancel_timer(State#state.tref),
     Pid = whereis(ReceiverModule),
+    {NewRate, CurrentStat} = case {ConsumerStat, ConsumerLastStat} of
+                                 {{undefined, _}, _} ->
+                                     {Rate, undefined};
+                                 {{Mod, Fn}, _} ->
+                                     ConsumerCurrentStat = Mod:Fn(),
+                                     CurrentRate = case ConsumerCurrentStat > ConsumerLastStat of
+                                                       true ->
+                                                           ConsumerRate = (ConsumerCurrentStat - ConsumerLastStat) / ConsumerCheckInterval,
+                                                           round(ConsumerRate + 0.5);
+                                                       _ -> %% consumer stat be resetted
+                                                           Rate
+                                                   end,
+                                     {CurrentRate, ConsumerCurrentStat}
+    end,
     {message_queue_len, Len} = erlang:process_info(Pid, message_queue_len),
-    ?DEBUG("Check before resume: QueueLen ~p, config ~p", [Len, MsgQueueLen]),
-    State2 = case Len > MsgQueueLen of
-                 true ->
-                     TRef = start_timer(Len, MsgQueueLen, Rate, resume),
-                     State#state{tref = TRef};
-                 _ ->
+    ConsumeMsgLen = ConsumerCheckInterval * NewRate,
+
+    ?DEBUG("Check before resume: QueueLen ~p, Interval ~p, Rate ~p ~n", [Len,ConsumerCheckInterval, NewRate]),
+    State2 = case {Len > ConsumeMsgLen, IsUnsubscribe} of
+                 {true, true} ->
+                     State;
+                 {true, false} ->
+                     unsubscribe_incomming_queues(Channel, QueueInfo),
+                     State#state{is_unsubscribe = true};
+                 {false, false} ->
+                     State;
+                 {false, true} ->
                      NewQueueInfo = [
                          {
                              ConsumeQueue,
@@ -290,13 +318,23 @@ handle_info({timeout, _Ref, resume}, #state{channel = Channel,
                      ?WARN("Resume Consumer \n old info ~p \n new info ~p", [QueueInfo, NewQueueInfo]),
                      State#state{is_unsubscribe = false, queue_info=NewQueueInfo}
              end,
-    {noreply, State2};
+    TRef = erlang:start_timer(ConsumerCheckInterval * 1000, self(), check_consumer),
+    {noreply, State2#state{tref = TRef, consumer_msg_rate = NewRate, consumer_last_stat = CurrentStat}};
 
 handle_info(_Info, State) ->
     {noreply, State}.
 
-terminate(Reason, _State=#state{channel=Channel, queue_info = QueueInfo}) ->
-    unsubscribe_incomming_queues(Channel, QueueInfo),
+terminate(Reason, _State=#state{channel=Channel,
+    is_unsubscribe = IsUnsubscribe,
+    tref = TimeRef,
+    queue_info = QueueInfo}) ->
+    case IsUnsubscribe of
+        false ->
+            unsubscribe_incomming_queues(Channel, QueueInfo);
+        _ ->
+            ignore
+    end,
+    erlang:cancel_timer(TimeRef),
     ?DEBUG("proxy client terminated ~p", [Reason]),
     ok.
 
@@ -423,18 +461,3 @@ declare_and_bind_outgoing_queues(Channel, Exchange, OutgoingQueues) ->
                 exchange = Exchange,
                 routing_key = Key})}
         || {Key, Queue} <- OutgoingQueues].
-
-start_timer(MsgQLen, Threshold, Rate, Msg) ->
-    Timeout = case (MsgQLen - Threshold) / Rate of
-                  Count when Count < 5 ->
-                      5000;
-                  Count when Count > 20 ->
-                      20000;
-                  Count ->
-                      round(Count) * 1000
-              end,
-
-    ?DEBUG("Start pause consumer ~p seconds", [Timeout]),
-    TRef = erlang:start_timer(Timeout, self(), Msg),
-    TRef.
-
