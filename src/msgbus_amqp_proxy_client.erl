@@ -129,9 +129,9 @@ init({Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
                 declare_and_bind_outgoing_queues(Channel, Exchange, OutgoingQueues),
 
                 GroupName = "msgbus_amqp_clients_" ++ integer_to_list(Priority),
+                ets:insert_new(msgbus_amqp_clients_priority_table, {Priority, GroupName}),
                 case pg2:get_members(GroupName) of
                     {error, {no_such_group, GroupName}} ->
-                        true = ets:insert_new(msgbus_amqp_clients_priority_table, {Priority, GroupName}),
                         pg2:create(GroupName);
                     _ ->
                         ignore
