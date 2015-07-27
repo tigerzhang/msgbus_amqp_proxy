@@ -1,6 +1,6 @@
-# MsgBus Amqp Proxy
+# Yunba Amqp Proxy
 
-This is a proxy of rabbitmq.
+This is a proxy library of rabbitmq using in Yunba.io.
 
 It connects to multiple rabbitmq brokers, and dispatch messages to them randomly
 leveraging pg2:get_closest_pid.
