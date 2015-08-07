@@ -386,10 +386,10 @@ config_val(C, Params, Default) ->
     end.
 
 amqp_channel(AmqpParams) ->
-    case maybe_new_pid({AmqpParams, connection},
+    case maybe_new_pid({node(), AmqpParams, connection},
         fun() -> amqp_connection:start(AmqpParams) end) of
         {ok, Client} ->
-            case maybe_new_pid({AmqpParams, channel},
+            case maybe_new_pid({node(), AmqpParams, channel},
                 fun() -> amqp_connection:open_channel(Client) end) of
                 {ok, Channel} ->
                     {ok, Client, Channel};
