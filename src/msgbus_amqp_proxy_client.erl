@@ -76,6 +76,9 @@ close(Id) ->
 unsubscribe() ->
     gen_server:call(?MODULE, unsubscribe).
 
+subscribe() ->
+    gen_server:call(?MODULE, subscribe).
+
 %% ------------------------------------------------------------------
 %% gen_server Function Definitions
 %% ------------------------------------------------------------------
@@ -139,7 +142,7 @@ init({Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
                 pg2:join(GroupName, self()),
 
                 {Connection, Channel, SubscribeInfo};
-            Error ->
+            _Error ->
                 Interval = 10,
                 ?ERROR("amqp_channel failed. will try again after ~p s", [Interval]),
                 % exit the client after 10 seconds, let the supervisor recreate it
@@ -175,9 +178,32 @@ init({Params, OutgoingQueues, IncomingQueues, NodeTag}) ->
         priority = Priority
     }}.
 
-handle_call(unsubscribe, _From,  #state{channel = Channel, queue_info = QueueInfo} = State) ->
-    unsubscribe_incomming_queues(Channel, QueueInfo),
-    {reply, ok, State};
+handle_call(unsubscribe, _From,  #state{channel = Channel, queue_info = QueueInfo, is_unsubscribe = IsUnSubScribe} = State) ->
+    case IsUnSubScribe of
+        false ->
+            unsubscribe_incomming_queues(Channel, QueueInfo);
+        _ ->
+            ignore
+    end,
+    State2 = State#state{is_unsubscribe = disable}, %% set flag disable to make sure won't subscribe queue
+    {reply, ok, State2};
+
+handle_call(subscribe, _From,  #state{channel = Channel,
+    is_unsubscribe = IsUnsubscribe,
+    queue_info = QueueInfo} = State) ->
+    State2 = case IsUnsubscribe of
+                 false ->
+                     State;
+                 _ ->
+                      NewQueueInfo = [{
+                              ConsumeQueue,
+                              amqp_channel:subscribe(Channel, #'basic.consume'{queue = ConsumeQueue,
+                                  consumer_tag = ConsumerTag, no_ack = true}, self())
+                          }  || {ConsumeQueue, {_, ConsumerTag}} <- QueueInfo],
+                ?DEBUG("Resume Consumer \n old info ~p \n new info ~p", [QueueInfo, NewQueueInfo]),
+                State#state{is_unsubscribe = false, queue_info=NewQueueInfo}
+    end,
+    {reply, ok, State2};
 
 handle_call(close, _From, #state{connection = Connection, channel = Channel} = State) ->
     ?DEBUG("~p", [<<"close channel">>]),
@@ -316,8 +342,11 @@ handle_info({timeout, _Ref, check_consumer}, #state{channel = Channel,
     {message_queue_len, Len} = erlang:process_info(Pid, message_queue_len),
     ConsumeMsgLen = ConsumerCheckInterval * NewRate,
 
-    ?DEBUG("Check before resume: QueueLen ~p, Interval ~p, Rate ~p ~n", [Len,ConsumerCheckInterval, NewRate]),
+    ?DEBUG("Check before resume: QueueLen ~p, Interval ~p, Rate ~p  unsub flag: ~p ~n",
+        [Len,ConsumerCheckInterval, NewRate, IsUnsubscribe]),
     State2 = case {Len > ConsumeMsgLen, IsUnsubscribe} of
+                 {_, disable} ->  %% won't subscribe queue
+                     State;
                  {true, true} ->
                      State;
                  {true, false} ->
