@@ -339,11 +339,14 @@ handle_info({timeout, _Ref, check_consumer}, #state{channel = Channel,
                                                    end,
                                      {CurrentRate, ConsumerCurrentStat}
     end,
-    {message_queue_len, Len} = erlang:process_info(Pid, message_queue_len),
+    {message_queue_len, Len} = case Pid of
+                                   undefined ->
+                                       {message_queue_len, 0};
+                                   _ ->
+                                       erlang:process_info(Pid, message_queue_len)
+                               end,
     ConsumeMsgLen = ConsumerCheckInterval * NewRate,
 
-    ?DEBUG("Check before resume: QueueLen ~p, Interval ~p, Rate ~p  unsub flag: ~p ~n",
-        [Len,ConsumerCheckInterval, NewRate, IsUnsubscribe]),
     State2 = case {Len > ConsumeMsgLen, IsUnsubscribe} of
                  {_, disable} ->  %% won't subscribe queue
                      State;
