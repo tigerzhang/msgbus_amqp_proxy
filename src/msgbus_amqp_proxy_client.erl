@@ -294,7 +294,6 @@ handle_info({#'basic.deliver'{consumer_tag = CTag,
                  _ ->
                      {message_queue_len, Len} = erlang:process_info(Pid, message_queue_len),
                      ConsumeMsgLen = ConsumerCheckInterval * MsgRate,
-                     ?DEBUG("QueueLen ~p, config ~p", [Len, ConsumeMsgLen]),
                      State2 = case {Len > ConsumeMsgLen, IsUnsubscribe} of
                                   {true, false} ->
                                       ?CRITICAL("msgq length ~p > config leng ~p", [Len, ConsumeMsgLen]),
